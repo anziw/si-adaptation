@@ -1,0 +1,368 @@
+---
+title: "K&D entropy analysis"
+output: html_document
+date: "2026-05-23"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages}
+# install.packages("slider")
+
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(slider)
+library(lme4)
+```
+
+```{r load data}
+df_someof <- read.csv("04_results_formatted.csv")
+demo_someof <- read.csv("04_subject_info.csv")
+
+df_some <- read.csv("05_results_formatted.csv")
+demo_some <- read.csv("05_subject_info.csv")
+
+df_some = df_some %>%
+  mutate(workerid = workerid + 1200)
+
+demo_some = demo_some %>%
+  mutate(workerid = workerid + 1200)
+
+df = rbind(df_someof, df_some)
+demo = rbind(demo_someof,demo_some)
+
+df = df %>%
+  dplyr::select(-c(X))
+
+df$logRT = log(df$rawRT)
+
+df$rt = df$rawRT
+```
+
+### Before Exclusions
+**Number of participants tested:**
+```{r before_exclusion, echo=FALSE}
+length(demo$workerid)
+```
+**Participants in each condition:**
+```{r before_exclusion_2, echo=FALSE}
+workers = df %>%
+  filter(slide_type == "practice_trial")
+table(workers$Answer.condition) /4
+```
+
+### Exclusions
+
+**Non-unique participants (remove all attempts):**
+```{r not_unique_exclude, echo=FALSE}
+not_unique = demo$workerid[duplicated(demo$workerid)]
+not_unique
+
+#remove non-unique
+df = df[!(df$workerid %in% not_unique),]
+demo = demo[!(demo$workerid %in% not_unique),]
+```
+
+**Participants whose native language is not english:**
+```{r lang_exclude, echo=FALSE}
+lang_exclude = demo %>%
+  dplyr::select(workerid, language) %>%
+  unique() %>%
+  filter(str_detect(language,regex("english", ignore_case=TRUE),negate=TRUE)) %>%
+  filter(str_detect(language,regex("eng", ignore_case=TRUE),negate=TRUE)) %>%
+  filter(str_detect(language,regex("egnlish", ignore_case=TRUE),negate=TRUE)) %>%
+  filter(str_detect(language,regex("United States", ignore_case=TRUE),negate=TRUE)) %>%
+  filter(str_detect(language,regex("en", ignore_case=TRUE),negate=TRUE)) %>%
+  filter(str_detect(language,regex("ernglish", ignore_case=TRUE),negate=TRUE)) %>%
+  filter(str_detect(language,regex("rnglish", ignore_case=TRUE),negate=TRUE)) %>%
+  filter(str_detect(language,regex("USA", ignore_case=TRUE),negate=TRUE)) %>%
+  filter(str_detect(language,regex("American", ignore_case=TRUE),negate=TRUE)) %>%
+  filter(str_detect(language,regex("United Kingdom", ignore_case=TRUE),negate=TRUE)) %>%
+  filter(str_detect(language,regex("ehglish", ignore_case=TRUE),negate=TRUE))
+
+lang_exclude
+
+lang_exclude = lang_exclude %>%
+  dplyr::select(workerid)
+
+df = df[!(df$workerid %in% lang_exclude$workerid),]
+```
+**Participants who got at least three practice trials wrong:**
+```{r practice_exclude, echo=FALSE}
+practice = df %>% 
+  filter(str_detect(slide_type,"practice_trial")) %>%
+  mutate(WrongAnswer = ((audio=="none.wav" & image=="13" & key=="Yes")|(audio=="all.wav" & image=="13" & key=="No")|(audio=="all.wav" & image=="0" & key=="Yes")| (audio=="none.wav" & image=="0" & key=="No"))) %>% 
+  group_by(workerid) %>% 
+  count(WrongAnswer) %>% 
+  filter(WrongAnswer == TRUE & n>2)
+
+#table(practice$n)
+
+#df = df[!(df$workerid %in% practice$workerid),]
+```
+**Participants who got the audio check wrong more than one once:**
+```{r audio_exclude, echo=FALSE}
+audio_fail = df %>%
+  filter(str_detect(slide_type,"audio_check")) %>%
+  mutate(WrongAnswer = key != "Four") %>%
+  group_by(workerid) %>% 
+  count(WrongAnswer) %>%
+  filter(WrongAnswer == TRUE & n>1)
+
+#table(audio_fail$workerid)
+
+#df = df[!(df$workerid %in% audio_fail$workerid ),]
+```
+**Participants who got the second comprehension question wrong more than twice:**
+```{r comp_exclude, echo=FALSE}
+comp1_fail = df[df$slide_type=="comprehension_check_1" & ((df$Answer.condition=="all_QUD" & df$key!="Empty") | (df$Answer.condition=="any_QUD" & df$key!="Jam")),]
+
+comp2_fail = df[df$slide_type=="comprehension_check_2" & ((df$Answer.condition=="all_QUD" & df$key!="Empty") | (df$Answer.condition=="any_QUD" & df$key!="Jam")),]
+
+comp1_wrong = comp1_fail %>%
+  group_by(workerid,Answer.condition) %>%
+  count() 
+
+table(comp1_wrong$Answer.condition)
+
+comp2_wrong = comp2_fail %>%
+  group_by(workerid,Answer.condition) %>%
+  count() 
+
+table(comp2_wrong$Answer.condition)
+
+#table(comp1_fail$workerid)
+#table(comp2_fail$workerid)
+table(comp1_fail$Answer.condition)
+table(comp2_fail$Answer.condition)
+
+comp2_fail =  comp2_fail %>%
+  group_by(workerid) %>%
+  count() %>%
+  filter(n>2)
+
+comp2_fail
+
+df = df[!(df$workerid %in% comp2_fail$workerid ),]
+```
+**Participants with accuracy of lower than 85% on non-critical trials with "some","none","all" and numbers below 6:**
+```{r accuracy_exclude, echo=FALSE}
+yes_list = c("some2","some5","some8","some11",
+             "all13",
+             "none0",
+             "zero0","two2","five5","eight8","eleven11","thirteen13")
+
+#exclude_list = c("seven11","eight8","eight13","nine5","ten5","ten13","eleven0","eleven8","eleven11","twelve2","thirteen8")
+
+exclude_list_1 = c("seven11","eight8","eight13","ten13","eleven8","eleven11","thirteen8")
+exclude_list_2 = c("eight13","four5","seven11","two5","one11","ten13","five13","two8")
+
+accuracy = df %>% 
+  filter(str_detect(slide_type,"trial")) %>% 
+  filter(str_detect(slide_type,"practice", negate = TRUE)) %>%
+  mutate(concat = str_c(str_sub(audio,1,end=-5),image)) %>%
+  filter(str_detect(concat,"some13", negate = TRUE)) %>%
+  filter(!key=="Late") %>%
+  filter(!concat %in% exclude_list_1) %>%
+  filter(!concat %in% exclude_list_2) %>%
+  mutate(rightAnswer = ifelse(concat %in% yes_list,"Yes","No")) %>%
+  mutate(gaveRightAnswer = ifelse(key==rightAnswer,"1","0"))
+
+answerNumber = accuracy %>%
+  group_by(workerid) %>%
+  count(workerid) %>%
+  mutate(answerNm = n)
+
+low_accuracy = accuracy %>%
+  group_by(workerid,gaveRightAnswer) %>%
+  count(gaveRightAnswer) %>%
+  merge(answerNumber[ ,c("workerid","answerNm")], by="workerid",all.x=TRUE) %>%
+  mutate(accuracy=ifelse(gaveRightAnswer=="1",n*100/answerNm,0)) %>%
+  filter(gaveRightAnswer=="1") %>%
+  filter(accuracy < 85)
+
+low_accuracy
+
+#latest exp
+deneme1 = df %>%
+  dplyr::select(workerid,Answer.condition) %>%
+  unique()
+
+deneme = low_accuracy %>%
+  merge(deneme1[ ,c("workerid","Answer.condition")], by="workerid",all.x=TRUE)
+
+table(deneme$Answer.condition)
+#
+
+df = df[!(df$workerid %in% low_accuracy$workerid),]
+```
+#### Additional Exclusions
+**Participants who gave more than 5 very slow (logRT>20) responses:**
+```{r slowworker_exclude, echo=FALSE}
+slow_workers = df %>%
+  filter(str_detect(slide_type,"trial")) %>% 
+  filter(str_detect(slide_type,"practice", negate = TRUE)) %>% 
+  mutate(slowResponse = logRT>30) %>%
+  group_by(workerid) %>%
+  count(slowResponse) %>%
+  filter((slowResponse == TRUE)&(n>5))
+slow_workers
+  
+df = df[!(df$workerid %in% slow_workers$workerid),]
+```
+**Responses that are faster than the onset of the quantifier (rawRT<600):**
+```{r fast_trial_exclude, echo=FALSE}
+df$ID <- seq.int(nrow(df))
+
+fast = df %>%
+  filter((slide_type=="trial_1"|slide_type=="trial_2") & rawRT<600)
+nrow(fast)
+
+fast = fast %>%
+  dplyr::select(ID)
+
+df = df[!(df$ID %in% fast$ID),]
+
+```
+
+**Responses that are very slow (logRT>20):**
+```{r slow_trial_exclude, echo=FALSE}
+slow = df %>%
+  filter((slide_type=="trial_1"|slide_type=="trial_2") & logRT>20)
+nrow(slow)
+
+slow = slow %>%
+  dplyr::select(ID)
+
+df = df[!(df$ID %in% slow$ID),]
+
+df = df %>%
+  dplyr::select(-c(ID))
+```
+## After Exclusions
+**Number of participants:**
+```{r after_exclusions, echo=FALSE}
+length(unique(df$workerid))
+```
+**Participants left in each condition:**
+```{r after_exclusions_2, echo=FALSE}
+workers = df %>%
+  filter(slide_type == "practice_trial")
+table(workers$Answer.condition) /4
+
+```
+
+```{r clean up}
+dat <- df %>%
+  filter(image == "13" & (audio == "some.wav" | audio == "summa.wav"),
+         key != "Late",
+         speaker_cond != "noQUD") %>%
+  rename(QUD = speaker_cond) %>%
+  mutate(partitive = ifelse(audio == "some.wav", "non-partitive", "partitive"))
+
+dat <- dat %>%
+  group_by(workerid) %>%
+  mutate(consistent = if_else(n_distinct(key) == 1, 1, 0)) %>%
+  ungroup()
+
+dat <- dat %>%
+  group_by(workerid) %>%
+  mutate(type = ifelse(sum(key == "No") > sum(key == "Yes"), "pragmatic",
+                       ifelse(sum(key == "No") < sum(key == "Yes"), "literal", "mixed"))) %>%
+  mutate(nondominant_responses = ifelse(type == "pragmatic", sum(key == "Yes"),
+                                     ifelse(type == "literal", sum(key == "No"), 4))) %>%
+  arrange(slide_number, .by_group = TRUE) %>%
+  mutate(order = row_number()) %>%
+  ungroup()
+
+count <- dat %>%
+  group_by(partitive, QUD) %>%
+  summarise(n = length(unique(workerid))) %>%
+  ungroup()
+
+```
+
+```{r calculate entropy}
+entropy <- function(p) {
+  ifelse(p %in% c(0, 1), 0, -p * log2(p) - (1 - p) * log2(1 - p))
+}
+
+dat_summ <- dat %>%
+  group_by(workerid) %>%
+  arrange(workerid, order) %>%
+  mutate(
+    window = order - 2,
+    implicature = slide_int(key, ~sum(.x == "No"), 
+                            .before = 2, .after = 0, .complete = TRUE)
+  ) %>%
+  ungroup()
+  
+dat_summ <- dat_summ %>%
+  filter(!is.na(implicature)) %>%
+  mutate(p = implicature / 3,
+         H = entropy(p))
+```
+
+```{r stats}
+dat_summ$partitive <- factor(dat_summ$partitive)
+dat_summ$QUD   <- factor(dat_summ$QUD)
+
+contrasts(dat_summ$partitive) <- contr.sum(nlevels(dat_summ$partitive))
+contrasts(dat_summ$QUD)   <- contr.sum(nlevels(dat_summ$QUD))
+
+contrasts(dat_summ$partitive)
+contrasts(dat_summ$QUD)
+
+dat_summ$window_scaled <- scale(dat_summ$window)
+
+m <- glmer(H ~ window_scaled*partitive*QUD + (1 + window_scaled | workerid),
+          family = 'binomial',
+          data = dat_summ)
+
+summary(m)
+```
+
+```{r plot by QUD and partitivity}
+dat_summ1 <- dat_summ %>%
+  group_by(window, partitive, QUD) %>%
+  summarize(entropy = mean(H),
+            se = sd(H)/sqrt(n())) %>%
+  ungroup()
+
+base_size = 16
+
+ggplot(dat_summ1, aes(x = window, y = entropy)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(aes(ymin = entropy - se, ymax = entropy + se), width = 0.2) +
+  scale_x_continuous(breaks = unique(dat_summ1$window)) +
+  labs(x = "window (width = 3)", y = "Shannon entropy") +
+  facet_grid(partitive ~ QUD) +
+  theme_bw(base_size = base_size) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(size = rel(1)))
+```
+
+
+```{r plot aggregated}
+dat_summ2 <- dat_summ %>%
+  group_by(window) %>%
+  summarise(avg_entropy = mean(H),
+            se = sd(H)/sqrt(n())) %>%
+  ungroup()
+
+ggplot(dat_summ2, aes(x = window, y = avg_entropy)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(aes(ymin = avg_entropy - se, ymax = avg_entropy + se), width = 0.2) +
+  scale_x_continuous(breaks = unique(dat_summ1$window)) +
+  labs(x = "window (width = 3)", y = "Shannon entropy") +
+  theme_bw(base_size = base_size) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(size = rel(1)))
+```
