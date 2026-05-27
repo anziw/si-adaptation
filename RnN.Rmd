@@ -1,0 +1,143 @@
+---
+title: "R&N"
+output: html_document
+date: "2025-11-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages}
+# install.packages("slider")
+
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(slider)
+library(lme4)
+library(lmerTest)
+```
+
+```{r load data}
+exp2 <- read.csv("exp2_post.csv")
+exp2$speakerNumber = 0
+
+exp3 <- read.csv("exp3_post.csv") %>%
+  rename(Condition = condition_new)
+exp3$speakerNumber = ifelse(exp3$speakerNumber == "two", 2, 1)
+exp3$participant = exp3$participant + length(unique(exp2$participant))
+
+shared_cols <- intersect(names(exp2), names(exp3))
+df <- bind_rows(exp2[shared_cols], exp3[shared_cols])
+
+```
+
+```{r reassign order}
+dat <- df %>%
+  group_by(participant) %>%
+  filter(condition == 1) %>%
+  mutate(order = row_number()) %>%
+  ungroup()
+
+dat <- dat %>%
+  group_by(participant) %>%
+  mutate(consistent = if_else(n_distinct(Condition) == 1, 1, 0)) %>%
+  mutate(type = ifelse(sum(Condition == "1_pragmatic") > sum(Condition == "1_logic"), "pragmatic",
+                       ifelse(sum(Condition == "1_pragmatic") < sum(Condition == "1_logic"), "literal", "mixed"))) %>%
+  mutate(nondominant_responses = ifelse(type == "pragmatic", sum(Condition == "1_logic"),
+                                     ifelse(type == "literal", sum(Condition == "1_pragmatic"), 4))) %>%
+  ungroup()
+
+write.csv(dat, "RnN_processed.csv", row.names = FALSE)
+
+dat <- dat %>%
+  filter(consistent == 0)
+```
+
+```{r calculate entropy}
+entropy <- function(p) {
+  ifelse(p %in% c(0, 1), 0, -p * log2(p) - (1 - p) * log2(1 - p))
+}
+
+dat_summ <- dat %>%
+  group_by(participant) %>%
+  arrange(participant, order) %>%
+  mutate(
+    window = order - 2,
+    implicature = slide_int(Condition, ~sum(.x == "1_pragmatic"), 
+                            .before = 2, .after = 0, .complete = TRUE)
+  ) %>%
+  ungroup()
+  
+dat_summ <- dat_summ %>%
+  filter(!is.na(implicature),
+         window <= 7) %>%
+  mutate(p = implicature / 3,
+         H = entropy(p))
+
+```
+
+```{r stats}
+count <- dat_summ %>%
+  group_by(speakerNumber) %>%
+  summarise(n = length(unique(participant))) %>%
+  ungroup()
+
+dat_summ$speakerNumber <- factor(dat_summ$speakerNumber)
+
+contrasts(dat_summ$speakerNumber) <- contr.sum(nlevels(dat_summ$speakerNumber))
+
+contrasts(dat_summ$speakerNumber)
+
+dat_summ$window_scaled <- scale(dat_summ$window)
+
+m <- glmer(H ~ window_scaled*speakerNumber + (1 + window_scaled || participant),
+           family = 'binomial',
+           data = dat_summ)
+
+summary(m)
+```
+
+```{r plot by speakerNumber}
+dat_summ1 <- dat_summ %>%
+  group_by(window, speakerNumber) %>%
+  summarize(entropy = mean(H),
+            se = sd(H)/sqrt(n())) %>%
+  ungroup()
+
+base_size = 16
+
+ggplot(dat_summ1, aes(x = window, y = entropy)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(aes(ymin = entropy - se, ymax = entropy + se), width = 0.2) +
+  scale_x_continuous(breaks = unique(dat_summ1$window)) +
+  labs(x = "window (width = 3)", y = "Shannon entropy") +
+  facet_grid(~ speakerNumber) +
+  theme_bw(base_size = base_size) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(size = rel(1)))
+
+ggsave("temp.png", height = 4, width = 8)
+```
+
+```{r aggregated}
+dat_summ2 <- dat_summ %>%
+  group_by(window) %>%
+  summarise(avg_entropy = mean(H),
+            se = sd(H)/sqrt(n())) %>%
+  ungroup()
+
+ggplot(dat_summ2, aes(x = window, y = avg_entropy)) +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(aes(ymin = avg_entropy - se, ymax = avg_entropy + se), width = 0.2) +
+  scale_x_continuous(breaks = unique(dat_summ1$window)) +
+  labs(x = "window (width = 3)", y = "Shannon entropy") +
+  theme_bw(base_size = base_size) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(size = rel(1)))
+```

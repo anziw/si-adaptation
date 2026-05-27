@@ -1,0 +1,259 @@
+---
+title: "cumulative distribution"
+output: html_document
+date: "2026-05-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(slider)
+library(lme4)
+library(lmerTest)
+```
+
+```{r prepare data}
+dat_kd <- read.csv("KnD_processed.csv")
+dat_rn <- read.csv("RnN_processed.csv")
+
+dat_kd <- dat_kd %>%
+  rename(participant = workerid) %>%
+  mutate(implicature = ifelse(key == "No", 1, 0)) %>%
+  select(c(participant, consistent, type, nondominant_responses, order, implicature))
+
+dat_kd$experiment = "Kursat and Degen"
+
+dat_rn <- dat_rn %>%
+  mutate(implicature = ifelse(Condition == "1_pragmatic", 1, 0)) %>%
+  dplyr::select(c(participant, consistent, type, nondominant_responses, order, implicature))
+
+dat_rn$experiment = "Ronderos and Noveck"
+
+dat <- bind_rows(dat_kd, dat_rn)
+```
+
+```{r run simulation}
+dat <- dat %>%
+  group_by(experiment, participant) %>%
+  mutate(prag_prob = sum(implicature == 1)/max(order)) %>%
+  ungroup()
+
+n_sims <- 1000
+
+predictions <- replicate(n_sims, rbinom(nrow(dat), size = 1, prob = dat$prag_prob))
+
+dat <- dat %>%
+  mutate(
+    pred_mean = rowMeans(predictions),
+    pred_sd   = apply(predictions, 1, sd),
+    pred_lower = apply(predictions, 1, quantile, 0.05),
+    pred_upper = apply(predictions, 1, quantile, 0.95)
+  )
+
+```
+
+```{r kd inconsistent}
+dat_kd1 <- dat %>%
+  filter(experiment == "Kursat and Degen")
+
+n_sims <- 1000
+
+for (i in 2:8) {
+  
+  dat_emp <- dat_kd1 %>%
+    filter(consistent == 0, order %in% 1:i) %>%
+    group_by(participant) %>%
+    mutate(empirical = sum(implicature == 1)) %>%
+    ungroup() %>%
+    distinct(participant, empirical) %>%
+    count(empirical, name = "num_participants") %>%
+    rename(num_implicatures = empirical) %>%
+    mutate(condition = "empirical", sd = NA)
+
+  dat_pred <- map(1:n_sims, function(s) {
+    dat_kd1 %>%
+      filter(consistent == 0, order %in% 1:i) %>%
+      mutate(prediction = rbinom(n(), 1, prag_prob)) %>%
+      group_by(participant) %>%
+      summarise(predicted = sum(prediction == 1), .groups = "drop") %>%
+      count(predicted, name = "num_participants") %>%
+      rename(num_implicatures = predicted)
+  }) %>%
+    bind_rows() %>%
+    group_by(num_implicatures) %>%
+    summarise(
+      sd = sd(num_participants),
+      num_participants = mean(num_participants),
+      .groups = "drop"
+    ) %>%
+    mutate(condition = "predicted")
+
+  dat_summ1 <- bind_rows(dat_emp, dat_pred)
+
+  p <- ggplot(dat_summ1, aes(x = num_implicatures, y = num_participants, fill = condition)) +
+    scale_fill_manual(values = c("#8B4DC9", "#D3D3D3")) +
+    geom_col(position = position_dodge2(preserve = "single"), width = 0.8) +
+    geom_errorbar(
+    aes(ymin = num_participants - sd, ymax = num_participants + sd),
+      position = position_dodge(width = 0.8),
+      width = 0.3, na.rm = TRUE) +
+    scale_x_continuous(breaks = 0:i) +
+    labs(x = "pragmatic responses", y = "participants") +
+    theme_bw()
+  
+  print(p)
+}
+```
+
+```{r kd all}
+for (i in 2:8) {
+  
+  dat_emp <- dat_kd1 %>%
+    filter(order %in% 1:i) %>%
+    group_by(participant) %>%
+    mutate(empirical = sum(implicature == 1)) %>%
+    ungroup() %>%
+    distinct(participant, empirical) %>%
+    count(empirical, name = "num_participants") %>%
+    rename(num_implicatures = empirical) %>%
+    mutate(condition = "empirical", sd = NA)
+
+  dat_pred <- map(1:n_sims, function(s) {
+    dat_kd1 %>%
+      filter(order %in% 1:i) %>%
+      mutate(prediction = rbinom(n(), 1, prag_prob)) %>%
+      group_by(participant) %>%
+      summarise(predicted = sum(prediction == 1), .groups = "drop") %>%
+      count(predicted, name = "num_participants") %>%
+      rename(num_implicatures = predicted)
+  }) %>%
+    bind_rows() %>%
+    group_by(num_implicatures) %>%
+    summarise(
+      sd = sd(num_participants),
+      num_participants = mean(num_participants),
+      .groups = "drop"
+    ) %>%
+    mutate(condition = "predicted")
+
+  dat_summ1 <- bind_rows(dat_emp, dat_pred)
+
+  p <- ggplot(dat_summ1, aes(x = num_implicatures, y = num_participants, fill = condition)) +
+    scale_fill_manual(values = c("#8B4DC9", "#D3D3D3")) +
+    geom_col(position = position_dodge2(preserve = "single"), width = 0.8) +
+    geom_errorbar(
+    aes(ymin = num_participants - sd, ymax = num_participants + sd),
+      position = position_dodge(width = 0.8),
+      width = 0.3, na.rm = TRUE) +
+    scale_x_continuous(breaks = 0:i) +
+    labs(x = "pragmatic responses", y = "participants") +
+    theme_bw()
+  
+  print(p)
+}
+```
+
+```{r rn all}
+dat_rn1 <- dat %>%
+  filter(experiment == "Ronderos and Noveck")
+
+for (i in 2:9) {
+  
+  dat_emp <- dat_rn1 %>%
+    filter(order %in% 1:i) %>%
+    group_by(participant) %>%
+    mutate(empirical = sum(implicature == 1)) %>%
+    ungroup() %>%
+    distinct(participant, empirical) %>%
+    count(empirical, name = "num_participants") %>%
+    rename(num_implicatures = empirical) %>%
+    mutate(condition = "empirical", sd = NA)
+
+  dat_pred <- map(1:n_sims, function(s) {
+    dat_rn1 %>%
+      filter(order %in% 1:i) %>%
+      mutate(prediction = rbinom(n(), 1, prag_prob)) %>%
+      group_by(participant) %>%
+      summarise(predicted = sum(prediction == 1), .groups = "drop") %>%
+      count(predicted, name = "num_participants") %>%
+      rename(num_implicatures = predicted)
+  }) %>%
+    bind_rows() %>%
+    group_by(num_implicatures) %>%
+    summarise(
+      sd = sd(num_participants),
+      num_participants = mean(num_participants),
+      .groups = "drop"
+    ) %>%
+    mutate(condition = "predicted")
+
+  dat_summ1 <- bind_rows(dat_emp, dat_pred)
+
+  p <- ggplot(dat_summ1, aes(x = num_implicatures, y = num_participants, fill = condition)) +
+    scale_fill_manual(values = c("#F5C842", "#D3D3D3")) +
+    geom_col(position = position_dodge2(preserve = "single"), width = 0.8) +
+    geom_errorbar(
+    aes(ymin = num_participants - sd, ymax = num_participants + sd),
+      position = position_dodge(width = 0.8),
+      width = 0.3, na.rm = TRUE) +
+    scale_x_continuous(breaks = 0:i) +
+    labs(x = "pragmatic responses", y = "participants") +
+    theme_bw()
+  
+  print(p)
+}
+```
+
+```{r rn inconsistent}
+
+for (i in 2:9) {
+  
+  dat_emp <- dat_rn1 %>%
+    filter(consistent == 0, order %in% 1:i) %>%
+    group_by(participant) %>%
+    mutate(empirical = sum(implicature == 1)) %>%
+    ungroup() %>%
+    distinct(participant, empirical) %>%
+    count(empirical, name = "num_participants") %>%
+    rename(num_implicatures = empirical) %>%
+    mutate(condition = "empirical", sd = NA)
+
+  dat_pred <- map(1:n_sims, function(s) {
+    dat_rn1 %>%
+      filter(consistent == 0, order %in% 1:i) %>%
+      mutate(prediction = rbinom(n(), 1, prag_prob)) %>%
+      group_by(participant) %>%
+      summarise(predicted = sum(prediction == 1), .groups = "drop") %>%
+      count(predicted, name = "num_participants") %>%
+      rename(num_implicatures = predicted)
+  }) %>%
+    bind_rows() %>%
+    group_by(num_implicatures) %>%
+    summarise(
+      sd = sd(num_participants),
+      num_participants = mean(num_participants),
+      .groups = "drop"
+    ) %>%
+    mutate(condition = "predicted")
+
+  dat_summ1 <- bind_rows(dat_emp, dat_pred)
+
+  p <- ggplot(dat_summ1, aes(x = num_implicatures, y = num_participants, fill = condition)) +
+    scale_fill_manual(values = c("#F5C842", "#D3D3D3")) +
+    geom_col(position = position_dodge2(preserve = "single"), width = 0.8) +
+    geom_errorbar(
+    aes(ymin = num_participants - sd, ymax = num_participants + sd),
+      position = position_dodge(width = 0.8),
+      width = 0.3, na.rm = TRUE) +
+    scale_x_continuous(breaks = 0:i) +
+    labs(x = "pragmatic responses", y = "participants") +
+    theme_bw()
+  
+  print(p)
+}
+```
